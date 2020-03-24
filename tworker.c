@@ -87,15 +87,13 @@ int main(int argc, char ** argv) {
      perror("Log file could not be mapped in:");
      exit(-1);
    }
-    
-
-  while(1) {
-    //if log file is not initialized initiaze it
+  
+  //if log file is not initialized initiaze it
     //else recover the previous values
-   if(!log->initialized){
+  if(!log->initialized){
      log->initialized = 1;
      log->log.txState = WTX_NOTACTIVE;
-   } else {
+  } else {
      //recovery phase
      if(log->log.txState == WTX_PREPARED){
        //not sure 
@@ -122,9 +120,6 @@ int main(int argc, char ** argv) {
      }else if(log->log.txState == WTX_TRUNCATE){
        //do nothing
      }
-   }
-
-
   }
 
    // Some demo data
