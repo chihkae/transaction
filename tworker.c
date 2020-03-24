@@ -87,6 +87,54 @@ int main(int argc, char ** argv) {
      perror("Log file could not be mapped in:");
      exit(-1);
    }
+    
+
+  while(1) {
+    //if log file is not initialized initiaze it
+    //else recover the previous values
+   if(!log->initialized){
+     log->initialized = 1;
+     log->log.txState = WTX_NOTACTIVE;
+   } else {
+     //recovery phase
+     if(log->log.txState == WTX_PREPARED){
+       //abort
+      
+     } else if(log->log.txState == WTX_ABORTED){
+      //rewrite old values to disk
+      log->txData.A = log->log.oldA;
+      log->txData.B = log->log.oldB;
+      strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+      log->log.txState = WTX_TRUNCATE;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
+
+     }else if(log->log.txState == WTX_COMMITTED){
+       //rewrite new values to disk 
+        log->txData.A = log->log.newA;
+        log->txData.B = log->log.newB;
+        strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
+        log->log.txState = WTX_TRUNCATE;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+     }else if(log->log.txState == WTX_TRUNCATE){
+       //do nothing
+     }else if(log->log.txState == WTX_BEGIN){
+        log->txData.A = log->log.oldA;
+        log->txData.B = log->log.oldB;
+        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        log->log.txState = WTX_TRUNCATE;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+
+     }
+   }
+
+
+  }
 
    // Some demo data
    strncpy(log->txData.IDstring, "Hi there!! :-)", IDLEN);

@@ -15,6 +15,7 @@
 #include "tmanager.h"
 #include <sys/mman.h>
 #include <strings.h>
+#include "msg.h"
 
 void usage(char * cmd) {
   printf("usage: %s  portNum\n",
@@ -113,11 +114,12 @@ int main(int argc, char ** argv) {
   
   if (! txlog->initialized) {
     int i;
-    for (i = 0; i  < MAX_WORKERS ; i++) {
+    for (i = 0; i  < MAX_TX ; i++) {
       txlog->transaction[i].tstate = TX_NOTINUSE;
+      txlog->numWorkersInTransaction[i] = 0;
     }
 
-    txlog->initialized = -1;
+    txlog->initialized = 1;
     // Make sure in memory copy is flushed to disk
     msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE); 
   }
@@ -128,8 +130,103 @@ int main(int argc, char ** argv) {
   printf("Log file name:            %s\n", logFileName);
 
   int n;
-  int i;
-  unsigned char buff[1024];
+  int transactionIndex;
+
+  while(1){
+    struct sockaddr_in client;
+    socklen_t len;
+    twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+    bzero(&buff, sizeof(twoPCMssg));
+    bzero(&client, sizeof(client));
+    n = recvfrom(sockfd,(struct twoPCMssg*)buff, sizeof(struct twoPCMssg *), MSG_WAITALL,
+		 (struct sockaddr *) &client, &len);
+    if (n < 0) {
+      perror("Receiving error:");
+      abort();
+    }
+    printf("Got a packet\n");
+  
+    if(buff->msgKind == beginTransaction || buff->msgKind == joiningWorker){
+        int transactionIndex = buff->ID % MAX_TX;
+        int workerIndex = txlog->numWorkersInTransaction[transactionIndex];
+        if(workerIndex > 6){
+            perror("more than 6 works");
+        }else{
+          txlog->transaction[transactionIndex].txID = buff->ID;
+          txlog->transaction[transactionIndex].worker[workerIndex] = client;
+          txlog->transaction[transactionIndex].tstate = TX_INPROGRESS;
+          txlog->numWorkersInTransaction[transactionIndex] = workerIndex + 1;
+          txlog->transaction[transactionIndex].workersParticipating += 1;
+          if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+              perror("Msync problem");
+          }
+        }
+        free(&client);
+    }else if(buff->msgKind == commitRequest){
+        int transactionIndex = buff->ID % MAX_TX;
+        struct tx* transaction = &(txlog->transaction[transactionIndex]);
+        transaction->tstate= TX_VOTING;
+        if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+              perror("Msync problem");
+        }
+        twoPCMssg* response = malloc(sizeof(twoPCMssg));
+        bzero(&response, sizeof(twoPCMssg));
+        response->ID = buff->ID;
+        response->msgKind = prepareToCommit; 
+        for(int i = 0; i < MAX_WORKERS; i++){
+          if((&transaction->worker[i]) != NULL){
+              int bytesSent = sendto(sockfd,(twoPCMssg*)response,
+              sizeof(twoPCMssg),0,(struct sockaddr*)&transaction->worker[i],sizeof(struct sockaddr_in));
+          }
+        }
+    }else{
+        int transactionIndex = buff->ID % MAX_TX;
+        struct tx* transaction = &(txlog->transaction[transactionIndex]);
+        if(transaction->tstate == TX_VOTING){
+            if(buff->msgKind == prepared){
+              transaction->preparedVotes += 1;
+              if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+                perror("Msync problem");
+              }
+            }else if(buff->msgKind == no){
+              transaction->tstate = TX_ABORTED;
+              
+              if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+                perror("Msync problem");
+              }
+              twoPCMssg* response = malloc(sizeof(twoPCMssg));
+              bzero(&response, sizeof(twoPCMssg));
+              response->ID = buff->ID;
+              response->msgKind = aborted; 
+              for(int i = 0; i < MAX_WORKERS; i++){
+                if((&transaction->worker[i]) != NULL){
+                    int bytesSent = sendto(sockfd,(twoPCMssg*)response,
+                    sizeof(twoPCMssg),0,(struct sockaddr*)&transaction->worker[i],sizeof(struct sockaddr_in));
+                }
+              }
+              free(response);
+            }
+            if(transaction->preparedVotes == transaction->workersParticipating){
+                transaction->tstate = TX_COMMITTED;
+                if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+                  perror("Msync problem");
+                }
+                twoPCMssg* response = malloc(sizeof(twoPCMssg));
+                bzero(&response, sizeof(twoPCMssg));
+                response->ID = buff->ID;
+                response->msgKind = commited; 
+                for(int i = 0; i < MAX_WORKERS; i++){
+                  if((&transaction->worker[i]) != NULL){
+                    int bytesSent = sendto(sockfd,(twoPCMssg*)response,
+                    sizeof(twoPCMssg),0,(struct sockaddr*)&transaction->worker[i],sizeof(struct sockaddr_in));
+                  }
+                }
+                free(response);
+            }
+        }
+    }
+
+  }
   for (i = 0;; i = (++i % MAX_WORKERS)) {
     struct sockaddr_in client;
     socklen_t len;

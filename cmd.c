@@ -70,7 +70,6 @@ int main(int argc, char ** argv) {
   memset((msg->strData).hostName, 0, sizeof((msg->strData).hostName));
   memset((msg->strData).newID, 0, sizeof((msg->strData).newID));
   cmd = calloc(255, 1);
-  
   // parse command
   if (strcmp(argv[1], "begin") == 0) {
     msg->msgID = BEGINTX;
@@ -109,6 +108,7 @@ int main(int argc, char ** argv) {
   }
   else if (strcmp(argv[1], "delay") == 0) {
     msg->msgID = DELAY_RESPONSE;
+    msg->delay = atoi(argv[4]);
     sendmessage(argv[2], argv[3], msg);
     }
   else if (strcmp(argv[1], "commit") == 0) {

@@ -14,6 +14,8 @@ enum txState {
 struct tx {
   unsigned long txID;
   enum txState tstate;
+  int preparedVotes;
+  int workersParticipating;
   struct  sockaddr_in worker[MAX_WORKERS];
 };
 
@@ -21,6 +23,7 @@ struct tx {
 struct transactionSet {
   int initialized;
   struct tx transaction[MAX_TX];
+  int numWorkersInTransaction[MAX_TX];
 };
 
 #endif
