@@ -98,9 +98,9 @@ int main(int argc, char ** argv) {
    } else {
      //recovery phase
      if(log->log.txState == WTX_PREPARED){
-       //abort
+       //not sure 
       
-     } else if(log->log.txState == WTX_ABORTED){
+     } else if(log->log.txState == WTX_ABORTED || log->log.txState == WTX_BEGIN){
       //rewrite old values to disk
       log->txData.A = log->log.oldA;
       log->txData.B = log->log.oldB;
@@ -121,15 +121,6 @@ int main(int argc, char ** argv) {
         }
      }else if(log->log.txState == WTX_TRUNCATE){
        //do nothing
-     }else if(log->log.txState == WTX_BEGIN){
-        log->txData.A = log->log.oldA;
-        log->txData.B = log->log.oldB;
-        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
-        log->log.txState = WTX_TRUNCATE;
-        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
-          perror("Msync problem");
-        }
-
      }
    }
 
