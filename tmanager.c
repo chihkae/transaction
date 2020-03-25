@@ -138,7 +138,7 @@ int main(int argc, char ** argv) {
     twoPCMssg* buff = malloc(sizeof(twoPCMssg));
     bzero(&buff, sizeof(twoPCMssg));
     bzero(&client, sizeof(client));
-    n = recvfrom(sockfd,(struct twoPCMssg*)buff, sizeof(struct twoPCMssg *), MSG_WAITALL,
+    int n = recvfrom(sockfd,(struct twoPCMssg*)buff, sizeof(struct twoPCMssg *), MSG_WAITALL,
 		 (struct sockaddr *) &client, &len);
     if (n < 0) {
       perror("Receiving error:");
@@ -161,7 +161,6 @@ int main(int argc, char ** argv) {
               perror("Msync problem");
           }
         }
-        free(&client);
     }else if(buff->msgKind == commitRequest){
         int transactionIndex = buff->ID % MAX_TX;
         struct tx* transaction = &(txlog->transaction[transactionIndex]);
@@ -227,26 +226,26 @@ int main(int argc, char ** argv) {
     }
 
   }
-  for (i = 0;; i = (++i % MAX_WORKERS)) {
-    struct sockaddr_in client;
-    socklen_t len;
-    bzero(&client, sizeof(client));
-    n = recvfrom(sockfd, buff, sizeof(buff), MSG_WAITALL,
-		 (struct sockaddr *) &client, &len);
-    if (n < 0) {
-      perror("Receiving error:");
-      abort();
-    }
-    printf("Got a packet\n");
-    txlog->transaction[i].worker[0] = client;
-    // Make sure in memory copy is flushed to disk
-    if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
-      perror("Msync problem");
-    }
+  // for (i = 0;; i = (++i % MAX_WORKERS)) {
+  //   struct sockaddr_in client;
+  //   socklen_t len;
+  //   bzero(&client, sizeof(client));
+  //   n = recvfrom(sockfd, buff, sizeof(buff), MSG_WAITALL,
+	// 	 (struct sockaddr *) &client, &len);
+  //   if (n < 0) {
+  //     perror("Receiving error:");
+  //     abort();
+  //   }
+  //   printf("Got a packet\n");
+  //   txlog->transaction[i].worker[0] = client;
+  //   // Make sure in memory copy is flushed to disk
+  //   if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
+  //     perror("Msync problem");
+  //   }
     
-  }
+  // }
 
-  sleep(1000);
+  // sleep(1000);
 
 
 }

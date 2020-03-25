@@ -10,10 +10,7 @@
 // and transaction manager that is a design decision for the implementator.
 
 #define HOSTLEN 512
-typedef struct{
-  uint32_t ID;
-  enum workerManagerMsgKind msgKind;
-}twoPCMssg;
+
 
 enum workerManagerMsgKind{
   beginTransaction,
@@ -23,8 +20,13 @@ enum workerManagerMsgKind{
   prepared,
   no,
   commited,
-  aborted
+  aborted,
 };
+
+typedef struct{
+  uint32_t ID;
+  enum workerManagerMsgKind msgKind;
+} twoPCMssg;
 
 enum cmdMsgKind {
         BEGINTX = 1000,

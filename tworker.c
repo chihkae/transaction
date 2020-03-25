@@ -24,7 +24,10 @@ void usage(char * cmd) {
 
 
 int main(int argc, char ** argv) {
-
+  int commandsockfd;
+  struct sockaddr_in commandAddr;
+  int txnManagersockfd;
+  struct sockaddr_in managerAddr;
   unsigned long cmdPort;
   unsigned long txPort;
   // This is some sample code feel free to delete it
@@ -44,6 +47,47 @@ int main(int argc, char ** argv) {
    if (argv[2] == end) {
      printf("Transaction port conversion error\n");
      exit(-1);
+  }
+  // Create the socket to receive from the command line
+
+  if ( (commandsockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
+    perror("socket creation failed");
+    exit(EXIT_FAILURE);
+  }
+  int optval = 1;
+  setsockopt(commandsockfd,SOL_SOCKET,SO_REUSEADDR,(const void*)&optval,sizeof(int));
+  // Setup my server information
+  memset(&commandAddr, 0, sizeof(commandAddr));
+  commandAddr.sin_family = AF_INET;
+  commandAddr.sin_port = htons(cmdPort);
+  // Accept on any of the machine's IP addresses.
+  commandAddr.sin_addr.s_addr = INADDR_ANY;
+
+  // Bind the socket to the requested addresses and port
+  if ( bind(commandsockfd, (const struct sockaddr *)&commandAddr,
+            sizeof(commandAddr)) < 0 )  {
+    perror("bind failed");
+    exit(EXIT_FAILURE);
+  }
+
+  //create socket to send messages to txn manager
+   if ( (txnManagersockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
+    perror("socket creation failed");
+    exit(EXIT_FAILURE);
+  }
+  setsockopt(txnManagersockfd,SOL_SOCKET,SO_REUSEADDR,(const void*)&optval,sizeof(int));
+  // Setup my server information
+  memset(&managerAddr, 0, sizeof(managerAddr));
+  managerAddr.sin_family = AF_INET;
+  managerAddr.sin_port = htons(txPort);
+  // Accept on any of the machine's IP addresses.
+  managerAddr.sin_addr.s_addr = INADDR_ANY;
+
+  // Bind the socket to the requested addresses and port
+  if ( bind(txnManagersockfd, (const struct sockaddr *)&managerAddr,
+            sizeof(managerAddr)) < 0 )  {
+    perror("bind failed");
+    exit(EXIT_FAILURE);
   }
 
    char  logFileName[128];
@@ -89,7 +133,7 @@ int main(int argc, char ** argv) {
    }
   
   //if log file is not initialized initiaze it
-    //else recover the previous values
+  //else recover the previous values
   if(!log->initialized){
      log->initialized = 1;
      log->log.txState = WTX_NOTACTIVE;
@@ -121,6 +165,73 @@ int main(int argc, char ** argv) {
        //do nothing
      }
   }
+
+  while(1){
+    
+    //receiving cmds from cmd.c
+    struct sockaddr_in client;
+    socklen_t len = sizeof(client);
+    msgType* cmd = malloc(sizeof(msgType));
+    bzero(&cmd, sizeof(msgType));
+
+    int n;
+    n = recvfrom(commandsockfd,cmd, sizeof(*cmd), MSG_WAITALL,(struct sockaddr *)&client,&len);
+    
+    if(n < 0){
+      perror("receiving error\n");
+    }
+
+
+    if(cmd->msgID == BEGINTX || cmd->msgID == JOINTX){
+      //copy values from disk to log
+      log->log.txID = cmd->tid;
+      log->log.txState = WTX_BEGIN;
+      log->log.transactionManager = managerAddr;
+      log->log.oldA = log->txData.A;
+      log->log.oldB = log->txData.B;
+      strncpy(log->log.oldIDstring, log->txData.IDstring , IDLEN);
+      log->log.oldSaved = 1;
+
+      //send msg to manager to begin transaction
+      twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+      bzero(&buff, sizeof(twoPCMssg));
+      buff->ID = cmd->tid;
+      buff->msgKind = beginTransaction;
+      int bytesSent;
+      if (bytesSent = sendto(txnManagersockfd,(twoPCMssg*)buff, sizeof(twoPCMssg),0,
+                          (struct sockaddr*)&managerAddr, sizeof(managerAddr)) == -1){
+        perror("UDP send failed: ");
+      } else {
+        printf("success\n");
+      }
+
+    }else if(cmd->msgID == NEW_A){
+
+    }else if(cmd->msgID == NEW_B){
+
+    }else if(cmd->msgID == NEW_IDSTR){
+
+    }else if(cmd->msgID == CRASH){
+
+    }else if(cmd->msgID == DELAY_RESPONSE){
+
+    }else if(cmd->msgID == COMMIT){
+
+    }else if(cmd->msgID == COMMIT_CRASH){
+
+    }else if(cmd->msgID == ABORT){
+
+    }else if(cmd->msgID == ABORT_CRASH){
+
+    }else if(cmd->msgID == VOTE_ABORT){
+
+    }
+
+
+
+
+  }
+  
 
    // Some demo data
    strncpy(log->txData.IDstring, "Hi there!! :-)", IDLEN);
