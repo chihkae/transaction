@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
 
 #include "msg.h"
 #include "tworker.h"
@@ -24,6 +25,7 @@ void usage(char * cmd) {
 
 
 int main(int argc, char ** argv) {
+  int delay = 0;
   int commandsockfd;
   struct sockaddr_in commandAddr;
   int txnManagersockfd;
@@ -90,6 +92,11 @@ int main(int argc, char ** argv) {
     exit(EXIT_FAILURE);
   }
 
+  struct pollfd pfds[1]; //array of pollfds, one for receiving from cmd and another to talk to txmanager
+  pfds[0].fd = sockfd; //initialization
+  pfds[0].events = POLLIN; //monitor to see if there is packet to read from socket
+  int fd_count = 1; //only one pollfd-sockfd
+
    char  logFileName[128];
 
   /* got the port number create a logfile name */
@@ -139,10 +146,10 @@ int main(int argc, char ** argv) {
      log->log.txState = WTX_NOTACTIVE;
   } else {
      //recovery phase
-     if(log->log.txState == WTX_PREPARED){
-       //not sure 
+     if(log->log.txState == WTX_PREPAREDAndVoted){
+       //keep contact txnmanager for result of votes
       
-     } else if(log->log.txState == WTX_ABORTED || log->log.txState == WTX_BEGIN){
+     } else if(log->log.txState == WTX_ABORTED || log->log.txState == WTX_BEGIN || log->log.txState == WTX_ABORTED_VOTEABORT){
       //rewrite old values to disk
       log->txData.A = log->log.oldA;
       log->txData.B = log->log.oldB;
@@ -182,7 +189,7 @@ int main(int argc, char ** argv) {
     }
 
 
-    if(cmd->msgID == BEGINTX || cmd->msgID == JOINTX){
+    if(cmd->msgID == BEGINTX || cmd->msgID == JOINTX) {
       //copy values from disk to log
       log->log.txID = cmd->tid;
       log->log.txState = WTX_BEGIN;
@@ -206,24 +213,169 @@ int main(int argc, char ** argv) {
       }
 
     }else if(cmd->msgID == NEW_A){
+      //if no transaction simply write to local disk
+      if(log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE) {
+        log->txData.A = cmd->newValue;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+
+      } else if(log->log.txState == WTX_BEGIN) {
+      //update new values in log
+        log->log.oldA = log->txData.A;
+        log->log.oldB = log->txData.B;
+        strncpy(log->log.oldIDstring, log->txData.IDstring,IDLEN);
+        log->log.newA = cmd->newValue;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+
+      }
 
     }else if(cmd->msgID == NEW_B){
+      if(log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE){
+        log->txData.B = cmd->newValue;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+      } else if(log->log.txState == WTX_BEGIN) {
+        log->log.oldA = log->txData.A;
+        log->log.oldB = log->txData.B;
+        strncpy(log->log.oldIDstring, log->txData.IDstring,IDLEN);
+        log->log.oldSaved = 1;
+        log->log.newB = cmd->newValue;
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+
+      }
 
     }else if(cmd->msgID == NEW_IDSTR){
+      if(log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE){
+        strncpy(log->txData.IDstring,cmd->strData.newID, IDLEN);
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+      } else if(log->log.txState == WTX_BEGIN) {
+        log->log.oldA = log->txData.A;
+        log->log.oldB = log->txData.B;
+        strncpy(log->log.oldIDstring, log->txData.IDstring,IDLEN);
+        log->log.oldSaved = 1;
+        strncpy(log->log.newIDstring, cmd->strData.newID,IDLEN);
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+          perror("Msync problem");
+        }
+      }
 
     }else if(cmd->msgID == CRASH){
-
+      //crash immediately
+      _exit();
     }else if(cmd->msgID == DELAY_RESPONSE){
+      delay = cmd->delay;
 
     }else if(cmd->msgID == COMMIT){
+      //update old values to log
+      //write commited values to new values of log
+      log->log.oldA = log->txData.A;
+      log->log.oldB = log->txData.B;
+      strncpy(log->log.oldIDstring, log->txData.IDstring,IDLEN);
+      log->log.oldSaved = 1;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
+
+      //sendPreparetocommit to manager
+      twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+      bzero(&buff, sizeof(twoPCMssg));
+      buff->msgKind = commitRequest;
+      int bytesSent;
+      if (bytesSent = sendto(txnManagersockfd,(twoPCMssg*)buff, sizeof(twoPCMssg),0,
+                          (struct sockaddr*)&managerAddr, sizeof(managerAddr)) == -1){
+        perror("UDP send failed: ");
+      } else {
+        printf("success\n");
+      }
 
     }else if(cmd->msgID == COMMIT_CRASH){
+       //update old values to log
+      //write commited values to new values of log
+      log->log.oldA = log->txData.A;
+      log->log.oldB = log->txData.B;
+      strncpy(log->log.oldIDstring, log->txData.IDstring,IDLEN);
+      log->log.oldSaved = 1;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
+
+      //sendPreparetocommit to manager
+      twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+      bzero(&buff, sizeof(twoPCMssg));
+      buff->msgKind = commitRequestCrash;
+      int bytesSent;
+      if (bytesSent = sendto(txnManagersockfd,(twoPCMssg*)buff, sizeof(twoPCMssg),0,
+                          (struct sockaddr*)&managerAddr, sizeof(managerAddr)) == -1){
+        perror("UDP send failed: ");
+      } else {
+        printf("success\n");
+      }
 
     }else if(cmd->msgID == ABORT){
+      //abort locally
+      //rewrite old values to disk
+      log->txData.A = log->log.oldA;
+      log->txData.B = log->log.oldB;
+      strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+      log->log.txState = WTX_ABORTED;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
+
+      //send abort msg to txnmanager
+      twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+      bzero(&buff, sizeof(twoPCMssg));
+      buff->msgKind = aborttxn;
+      int bytesSent;
+      if (bytesSent = sendto(txnManagersockfd,(twoPCMssg*)buff, sizeof(twoPCMssg),0,
+                          (struct sockaddr*)&managerAddr, sizeof(managerAddr)) == -1){
+        perror("UDP send failed: ");
+      } else {
+        printf("success\n");
+      }
 
     }else if(cmd->msgID == ABORT_CRASH){
+      //abort locally
+      //rewrite old values to disk
+      log->txData.A = log->log.oldA;
+      log->txData.B = log->log.oldB;
+      strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+      log->log.txState = WTX_ABORTED;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
+
+      //send abortandcrash msg to txnmanager
+      twoPCMssg* buff = malloc(sizeof(twoPCMssg));
+      bzero(&buff, sizeof(twoPCMssg));
+      buff->msgKind = abortandcrashtxn;
+      int bytesSent;
+      if (bytesSent = sendto(txnManagersockfd,(twoPCMssg*)buff, sizeof(twoPCMssg),0,
+                          (struct sockaddr*)&managerAddr, sizeof(managerAddr)) == -1){
+        perror("UDP send failed: ");
+      } else {
+        printf("success\n");
+      }
+      
 
     }else if(cmd->msgID == VOTE_ABORT){
+      //abort locally
+      //rewrite old values to disk
+      log->txData.A = log->log.oldA;
+      log->txData.B = log->log.oldB;
+      strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+      log->log.txState = WTX_ABORTED_VOTEABORT;
+      if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
+        perror("Msync problem");
+      }
 
     }
 
