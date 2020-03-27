@@ -13,14 +13,18 @@
 
 
 enum workerManagerMsgKind{
-  beginTransaction,
-  joiningWorker,
-  commitRequest,
+  beginTransaction, //
+  joiningWorker, //
+  commitRequest, // 
+  commitRequestCrash, 
   prepareToCommit,
   prepared,
   no,
   commited,
   aborted,
+  aborttxn,
+  abortandcrashtxn,
+  votingDecision,
 };
 
 typedef struct{

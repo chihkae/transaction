@@ -8,7 +8,8 @@ enum txState {
   TX_INPROGRESS,
   TX_VOTING,
   TX_ABORTED,
-  TX_COMMITTED
+  TX_COMMITTED,
+  TX_Recovering,
 };
 
 struct tx {
@@ -17,6 +18,7 @@ struct tx {
   int preparedVotes;
   int workersParticipating;
   struct  sockaddr_in worker[MAX_WORKERS];
+  clock_t start_t;
 };
 
 
