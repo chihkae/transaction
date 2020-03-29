@@ -13,14 +13,64 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
+#include <stdio.h> 
+#include <stdlib.h> 
+#include <unistd.h> 
+#include <string.h> 
+#include <sys/types.h> 
+#include <sys/socket.h> 
+#include <arpa/inet.h> 
+#include <netinet/in.h> 
+#include <errno.h>
+#include <time.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #include "msg.h"
 #include "tworker.h"
+
+int txnManagersockfd;
+struct addrinfo hints, *servinfo;
+struct sockaddr_in* transactionManager;
+int rv;
 
 void usage(char *cmd)
 {
   printf("usage: %s  cmdportNum txportNum\n",
          cmd);
+}
+
+void setUpSocket(char * hostname, int port) {
+	
+  
+  // specify socket options
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_DGRAM;
+
+  char str[1024];
+  sprintf(str,"%d",port);
+  
+  if ((rv = getaddrinfo(hostname, str, &hints, &servinfo)) != 0) {
+    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+    exit(1);
+  }
+  transactionManager = (struct sockaddr_in*) servinfo->ai_addr;
+
+  
+}
+
+void sendMssg(twoPCMssg* msg, struct sockaddr_in manager){
+  
+  struct sockaddr* ptr = (struct sockaddr*)&manager;
+  
+  int numbytes; 
+  if ((numbytes = sendto(txnManagersockfd, msg, sizeof(twoPCMssg), 0, ptr, sizeof(*ptr))) == -1) {
+    perror("talker: sendto");
+  }
+
 }
 
 int main(int argc, char **argv)
@@ -29,7 +79,6 @@ int main(int argc, char **argv)
   int delay = 0;
   int commandsockfd;
   struct sockaddr_in commandAddr;
-  int txnManagersockfd;
   struct sockaddr_in managerAddr;
   unsigned long cmdPort;
   unsigned long txPort;
@@ -147,7 +196,7 @@ int main(int argc, char **argv)
   }
 
   // Now map the file in.
-  struct logFile *log = mmap(NULL, 512, PROT_READ | PROT_WRITE, MAP_SHARED, logfileFD, 0);
+  struct logFile* log = mmap(NULL, 512, PROT_READ | PROT_WRITE, MAP_SHARED, logfileFD, 0);
   if (log == NULL)
   {
     perror("Log file could not be mapped in:");
@@ -168,7 +217,6 @@ int main(int argc, char **argv)
     {
       //keep contact txnmanager for result of votes
       twoPCMssg *awaitingDecisionMssg = malloc(sizeof(twoPCMssg));
-      bzero(&awaitingDecisionMssg, sizeof(twoPCMssg));
       awaitingDecisionMssg->ID = log->log.txID;
       awaitingDecisionMssg->msgKind = votingDecision;
       int toWait = 30;
@@ -181,12 +229,7 @@ int main(int argc, char **argv)
         }
         else if (poll_count == 0)
         {
-          int bytesSent;
-          if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)awaitingDecisionMssg, sizeof(twoPCMssg), 0,
-                                 (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-          {
-            perror("UDP send failed for votingdecision mssg: ");
-          }
+          sendMssg(awaitingDecisionMssg,log->log.transactionManager);
           toWait = 10;
         }
         else if (pfds[1].revents == POLLIN)
@@ -195,7 +238,6 @@ int main(int argc, char **argv)
           struct sockaddr_in txManager;
           socklen_t len = sizeof(txManager);
           twoPCMssg *managerMssg = malloc(sizeof(twoPCMssg));
-          bzero(&managerMssg, sizeof(twoPCMssg));
           int n;
           n = recvfrom(txnManagersockfd, managerMssg, sizeof(*managerMssg), MSG_WAITALL, (struct sockaddr *)&txManager, &len);
 
@@ -272,12 +314,12 @@ int main(int argc, char **argv)
     }
     else if (pfds[0].revents & POLLIN)
     {
+      printf("pollin\n");
 
       //receiving cmds from cmd.c
       struct sockaddr_in client;
       socklen_t len = sizeof(client);
-      msgType *cmd = malloc(sizeof(msgType));
-      bzero(&cmd, sizeof(msgType));
+      msgType *cmd = (msgType *) malloc(sizeof(msgType));
 
       int n;
       n = recvfrom(commandsockfd, cmd, sizeof(*cmd), MSG_WAITALL, (struct sockaddr *)&client, &len);
@@ -289,6 +331,7 @@ int main(int argc, char **argv)
 
       if (cmd->msgID == BEGINTX || cmd->msgID == JOINTX)
       {
+        printf("received begin tx or jointx\n");
         //copy values from disk to log
         log->log.txID = cmd->tid;
         log->log.txState = WTX_BEGIN;
@@ -302,24 +345,27 @@ int main(int argc, char **argv)
         log->log.newA = -2001;
         log->log.newB = -2001;
         strncpy(log->log.newIDstring, "-2001", IDLEN);
+        setUpSocket(cmd->strData.hostName, cmd->port);
+        if(transactionManager != NULL){
+          log->log.transactionManager = *transactionManager;
+        }
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+        {
+          perror("Msync problem");
+        }
         //send msg to manager to begin transaction
-        twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-        bzero(&buff, sizeof(twoPCMssg));
+        twoPCMssg* buff = malloc(sizeof(twoPCMssg));
         buff->ID = cmd->tid;
-        buff->msgKind = beginTransaction;
-        int bytesSent;
-        if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)buff, sizeof(twoPCMssg), 0,
-                               (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-        {
-          perror("UDP send failed: ");
+        if(cmd->msgID == JOINTX){
+          buff->msgKind = joiningWorker;
+        }else if(cmd->msgID == BEGINTX){
+          buff->msgKind = beginTransaction;
         }
-        else
-        {
-          printf("success\n");
-        }
+        sendMssg(buff,log->log.transactionManager);
       }
       else if (cmd->msgID == NEW_A)
       {
+        printf("newA\n");
         //if no transaction simply write to local disk
         if (log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE)
         {
@@ -337,7 +383,6 @@ int main(int argc, char **argv)
           strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
           log->log.oldSaved = 1;
           log->log.newA = cmd->newValue;
-
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
@@ -416,18 +461,9 @@ int main(int argc, char **argv)
 
         //sendPreparetocommit to manager
         twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-        bzero(&buff, sizeof(twoPCMssg));
+        buff->ID = log->log.txID;
         buff->msgKind = commitRequest;
-        int bytesSent;
-        if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)buff, sizeof(twoPCMssg), 0,
-                               (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-        {
-          perror("UDP send failed: ");
-        }
-        else
-        {
-          printf("success\n");
-        }
+        sendMssg(buff,log->log.transactionManager);
       }
       else if (cmd->msgID == COMMIT_CRASH)
       {
@@ -443,19 +479,10 @@ int main(int argc, char **argv)
         }
 
         //sendPreparetocommit to manager
-        twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-        bzero(&buff, sizeof(twoPCMssg));
+        twoPCMssg *buff = (twoPCMssg*) malloc(sizeof(twoPCMssg));
+        buff->ID = log->log.txID;
         buff->msgKind = commitRequestCrash;
-        int bytesSent;
-        if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)buff, sizeof(twoPCMssg), 0,
-                               (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-        {
-          perror("UDP send failed: ");
-        }
-        else
-        {
-          printf("success\n");
-        }
+        sendMssg(buff,log->log.transactionManager);
       }
       else if (cmd->msgID == ABORT)
       {
@@ -472,18 +499,9 @@ int main(int argc, char **argv)
 
         //send abort msg to txnmanager
         twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-        bzero(&buff, sizeof(twoPCMssg));
         buff->msgKind = aborttxn;
-        int bytesSent;
-        if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)buff, sizeof(twoPCMssg), 0,
-                               (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-        {
-          perror("UDP send failed: ");
-        }
-        else
-        {
-          printf("success\n");
-        }
+        buff->ID = log->log.txID;
+        sendMssg(buff,log->log.transactionManager);
       }
       else if (cmd->msgID == ABORT_CRASH)
       {
@@ -500,18 +518,9 @@ int main(int argc, char **argv)
 
         //send abortandcrash msg to txnmanager
         twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-        bzero(&buff, sizeof(twoPCMssg));
         buff->msgKind = abortandcrashtxn;
-        int bytesSent;
-        if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)buff, sizeof(twoPCMssg), 0,
-                               (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-        {
-          perror("UDP send failed: ");
-        }
-        else
-        {
-          printf("success\n");
-        }
+        buff->ID = log->log.txID;
+        sendMssg(buff,log->log.transactionManager);
       }
       else if (cmd->msgID == VOTE_ABORT)
       {
@@ -531,11 +540,12 @@ int main(int argc, char **argv)
     {
       if (pfds[1].fd == txnManagersockfd)
       {
+        printf("socket manager poll in\n");
         //receiving cmds from cmd.c
+
         struct sockaddr_in txManager;
         socklen_t len = sizeof(txManager);
-        twoPCMssg *managerMssg = malloc(sizeof(twoPCMssg));
-        bzero(&managerMssg, sizeof(twoPCMssg));
+        twoPCMssg *managerMssg = (twoPCMssg*)malloc(sizeof(twoPCMssg));
         int n;
         n = recvfrom(txnManagersockfd, managerMssg, sizeof(*managerMssg), MSG_WAITALL, (struct sockaddr *)&txManager, &len);
 
@@ -546,48 +556,30 @@ int main(int argc, char **argv)
 
         if (managerMssg->msgKind == prepareToCommit)
         {
+          printf("prepare to commit mssg received\n");
           //respond commit by default
           if (log->log.txState == WTX_ABORTED_VOTEABORT)
           {
             sleep(delay);
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
-            bzero(&mssgToTxnManager, sizeof(twoPCMssg));
             mssgToTxnManager->ID = log->log.txID;
             mssgToTxnManager->msgKind = no;
-            int bytesSent;
-            if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)mssgToTxnManager, sizeof(twoPCMssg), 0,
-                                   (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-            {
-              perror("UDP send failed: ");
-            }
-            else
-            {
-              printf("success\n");
-            }
+            sendMssg(mssgToTxnManager,log->log.transactionManager);
           }
           else
           {
             log->log.txState = WTX_PREPAREDAndNotVoted;
             sleep(delay);
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
-            bzero(&mssgToTxnManager, sizeof(twoPCMssg));
             mssgToTxnManager->ID = log->log.txID;
             mssgToTxnManager->msgKind = prepared;
-            int bytesSent;
-            if (bytesSent = sendto(txnManagersockfd, (twoPCMssg *)mssgToTxnManager, sizeof(twoPCMssg), 0,
-                                   (struct sockaddr *)&managerAddr, sizeof(managerAddr)) == -1)
-            {
-              perror("UDP send failed: ");
-            }
-            else
-            {
-              printf("success\n");
-            }
+            sendMssg(mssgToTxnManager,log->log.transactionManager);
             log->log.txState = WTX_PREPAREDAndVoted;
             if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
             {
               perror("Msync problem");
             }
+            printf("sent prepared to manager\n");
           }
         }
         else if (managerMssg->msgKind == aborted)
@@ -605,6 +597,7 @@ int main(int argc, char **argv)
         }
         else if (managerMssg->msgKind == commited)
         {
+          printf("received commited mssg\n");
           log->log.txState = WTX_COMMITTED;
           //txn commited so write new log values to disk
           //check if newA is what we updated in the txn
@@ -622,33 +615,13 @@ int main(int argc, char **argv)
           {
             strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
           }
-
+          log->log.txState = WTX_TRUNCATE;
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
-          log->log.txState = WTX_TRUNCATE;
         }
       }
     }
   }
-
-  //  // Some demo data
-  //  strncpy(log->txData.IDstring, "Hi there!! :-)", IDLEN);
-  //  log->txData.A = 10;
-  //  log->txData.B = 100;
-  //  log->log.oldA = 83;
-  //  log->log.newA = 10;
-  //  log->log.oldB = 100;
-  //  log->log.newB = 1023;
-  //  log->initialized = -1;
-  //  if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE)) {
-  //    perror("Msync problem");
-  //  }
-
-  //   printf("Command port:  %d\n", cmdPort);
-  //   printf("TX port:       %d\n", txPort);
-  //   printf("Log file name: %s\n", logFileName);
-  // // Some demo data
-  //  strncpy(log->log.newIDstring, "1234567890123456789012345678901234567890", IDLEN);
 }

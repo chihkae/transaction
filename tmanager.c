@@ -127,7 +127,8 @@ int main(int argc, char **argv)
     for (i = 0; i < MAX_TX; i++)
     {
       txlog->transaction[i].tstate = TX_NOTINUSE;
-      txlog->numWorkersInTransaction[i] = 0;
+      txlog->transaction[i].workersParticipating = 0;
+      txlog->transaction[i].inUse = 0;
     }
 
     txlog->initialized = 1;
@@ -140,8 +141,9 @@ int main(int argc, char **argv)
     struct tx *ptr = txlog->transaction;
     for (int i = 0; i < MAX_TX; i++)
     {
-      if (ptr[i].tstate == TX_INPROGRESS || TX_VOTING)
+      if ((ptr[i].tstate == TX_INPROGRESS || ptr[i].tstate == TX_VOTING) && (ptr[i].tstate == 1))
       {
+        printf("setting to recovery state\n");
         ptr[i].tstate == TX_Recovering;
       }
       if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
@@ -161,7 +163,8 @@ int main(int argc, char **argv)
   while (1)
   {
     //process recovery state
-
+    //if we crashed and recovered, tell workers that the transaction is aborted for txns that
+    //have not been commited or aborted
     struct tx *ptr = txlog->transaction;
 
     for (int i = 0; i < MAX_TX; i++)
@@ -174,32 +177,39 @@ int main(int argc, char **argv)
           if (&(addresses[j]) != NULL)
           {
             twoPCMssg *recoverymssg = malloc(sizeof(twoPCMssg));
-            bzero(&recoverymssg, sizeof(twoPCMssg));
             recoverymssg->ID = ptr[i].txID;
             recoverymssg->msgKind = aborted;
             int bytesSent = sendto(sockfd, (twoPCMssg *)recoverymssg,
                                    sizeof(twoPCMssg), 0, (struct sockaddr *)&addresses[j], sizeof(struct sockaddr_in));
           }
         }
+        ptr[i].tstate = TX_ABORTED;
+        ptr[i].inUse = 0;
       }
     }
 
     poll_count = poll(pfds, fd_count, 10000);
+    if (poll_count == -1)
+    {
+      printf("poll error\n");
+    }
 
     //timeout scenario
     if (poll_count == 0)
     {
+      printf("timeout\n");
       //abort transaction if 10 seconds have elapsed since commitRequest
       struct tx *ptr = txlog->transaction;
       clock_t end_t = clock();
       for (int i = 0; i < MAX_TX; i++)
       {
-        if (ptr[i].tstate == TX_VOTING)
+        if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
         {
           double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
           if (ptr[i].preparedVotes < ptr[i].workersParticipating && timeElapsed > 10.0)
           {
             ptr[i].tstate = TX_ABORTED;
+            ptr[i].inUse = 0;
             if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
             {
               perror("Msync problem");
@@ -211,7 +221,6 @@ int main(int argc, char **argv)
               if (&(addresses[j]) != NULL)
               {
                 twoPCMssg *abortMssg = malloc(sizeof(twoPCMssg));
-                bzero(&abortMssg, sizeof(twoPCMssg));
                 abortMssg->ID = ptr[i].txID;
                 abortMssg->msgKind = aborted;
                 int bytesSent = sendto(sockfd, (twoPCMssg *)abortMssg,
@@ -224,17 +233,20 @@ int main(int argc, char **argv)
     }
     else if (pfds[0].revents & POLLIN)
     {
+      printf("poll in\n");
+      //check for timeouts of other txns while receiving msgs
       //abort transaction if 10 seconds have elapsed since commitRequest
       struct tx *ptr = txlog->transaction;
       clock_t end_t = clock();
       for (int i = 0; i < MAX_TX; i++)
       {
-        if (ptr[i].tstate == TX_VOTING)
+        if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
         {
           double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
           if (ptr[i].preparedVotes < ptr[i].workersParticipating && timeElapsed > 10.0)
           {
             ptr[i].tstate = TX_ABORTED;
+            ptr[i].inUse = 0;
             if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
             {
               perror("Msync problem");
@@ -246,7 +258,6 @@ int main(int argc, char **argv)
               if (&(addresses[j]) != NULL)
               {
                 twoPCMssg *abortMssg = malloc(sizeof(twoPCMssg));
-                bzero(&abortMssg, sizeof(twoPCMssg));
                 abortMssg->ID = ptr[i].txID;
                 abortMssg->msgKind = aborted;
                 int bytesSent = sendto(sockfd, (twoPCMssg *)abortMssg,
@@ -259,9 +270,7 @@ int main(int argc, char **argv)
 
       struct sockaddr_in client;
       socklen_t len;
-      twoPCMssg *buff = malloc(sizeof(twoPCMssg));
-      bzero(&buff, sizeof(twoPCMssg));
-      bzero(&client, sizeof(client));
+      twoPCMssg *buff = (twoPCMssg *)malloc(sizeof(twoPCMssg));
       int n = recvfrom(sockfd, (struct twoPCMssg *)buff, sizeof(struct twoPCMssg *), MSG_WAITALL,
                        (struct sockaddr *)&client, &len);
       if (n < 0)
@@ -271,156 +280,268 @@ int main(int argc, char **argv)
       }
       printf("Got a packet\n");
 
-      if (buff->msgKind == beginTransaction || buff->msgKind == joiningWorker)
+      if (buff->msgKind == beginTransaction)
       {
-        int transactionIndex = buff->ID % MAX_TX;
-        int workerIndex = txlog->numWorkersInTransaction[transactionIndex];
-        if (workerIndex > 6)
+        int index = -1;
+        printf("beginning transaction\n");
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
         {
-          perror("more than 6 works");
+          if (ptr[i].inUse == 0)
+          {
+            index = i;
+            ptr[i].inUse = 1;
+            ptr[i].tstate = TX_INPROGRESS;
+            ptr[i].txID = buff->ID;
+            ptr[i].worker[0] = client;
+            ptr[i].workersParticipating = 1;
+            break;
+          }
         }
-        else
+        printf("index:%d",index);
+        if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
         {
-          txlog->transaction[transactionIndex].txID = buff->ID;
-          txlog->transaction[transactionIndex].worker[workerIndex] = client;
-          txlog->transaction[transactionIndex].tstate = TX_INPROGRESS;
-          txlog->numWorkersInTransaction[transactionIndex] = workerIndex + 1;
-          txlog->transaction[transactionIndex].workersParticipating += 1;
+          perror("Msync problem");
+        }
+      }
+      else if (buff->msgKind == joiningWorker)
+      {
+        printf("joining transaction\n");
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
+        {
+          if (ptr[i].txID == buff->ID)
+          {
+            ptr[i].workersParticipating = ptr[i].workersParticipating + 1;
+            int indexInWorker = ptr[i].workersParticipating - 1;
+            printf("workers participating:%d\n",ptr[i].workersParticipating);
+            printf("index of joining worker: %d\n",indexInWorker);
+            if (indexInWorker < 6)
+            {
+              ptr[i].worker[indexInWorker] = client;
+            }
+            break;
+          }
+        }
+        if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+        {
+          perror("Msync problem");
+        }
+      }
+      else if (buff->msgKind == commitRequest)
+      {
+        printf("commitRequest\n");
+        int index = -1;
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
+        {
+          if (ptr[i].txID == buff->ID)
+          {
+            index = i;
+            break;
+          }
+        }
+        if (index != -1)
+        {
+          printf("index:%d\n",index);
+          printf("commit request index not -1\n");
+          struct tx *transaction = &(txlog->transaction[index]);
+          *(&(transaction->tstate)) = TX_VOTING;
+          if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+          {
+            perror("Msync problem");
+          }
+          printf("TX state:%d\n", txlog->transaction[index].tstate);
+          twoPCMssg *response = (twoPCMssg*)malloc(sizeof(twoPCMssg));
+          response->ID = buff->ID;
+          response->msgKind = prepareToCommit;
+
+          for (int i = 0; i < MAX_WORKERS; i++)
+          {
+            if (&(transaction->worker[i]) != NULL)
+            {
+              printf("trnsaction worker %d address not null\n",i);
+              int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                     sizeof(twoPCMssg), 0, (struct sockaddr *)&(transaction->worker[i]), sizeof(struct sockaddr_in));
+              printf("sent\n");
+            }
+          }
+          transaction->start_t = clock();
           if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
         }
       }
-      else if (buff->msgKind == commitRequest)
-      {
-        int transactionIndex = buff->ID % MAX_TX;
-        struct tx *transaction = &(txlog->transaction[transactionIndex]);
-        transaction->tstate = TX_VOTING;
-        if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
-        {
-          perror("Msync problem");
-        }
-        twoPCMssg *response = malloc(sizeof(twoPCMssg));
-        bzero(&response, sizeof(twoPCMssg));
-        response->ID = buff->ID;
-        response->msgKind = prepareToCommit;
-        for (int i = 0; i < MAX_WORKERS; i++)
-        {
-          if ((&transaction->worker[i]) != NULL)
-          {
-            int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&transaction->worker[i], sizeof(struct sockaddr_in));
-          }
-        }
-        transaction->start_t = clock();
-        if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
-        {
-          perror("Msync problem");
-        }
-      }
       else if (buff->msgKind == votingDecision)
       {
-        int transactionIndex = buff->ID % MAX_TX;
-        struct tx *transaction = &txlog->transaction[transactionIndex];
-        if (transaction->tstate == TX_COMMITTED)
+        printf("received voting decision mssg\n");
+        int index = -1;
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
         {
-          twoPCMssg *response = malloc(sizeof(twoPCMssg));
-          bzero(&response, sizeof(twoPCMssg));
-          response->ID = buff->ID;
-          response->msgKind = commited;
-          int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                 sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+          if (ptr[i].txID == buff->ID)
+          {
+            index = i;
+            break;
+          }
         }
-        else if (transaction->tstate == TX_ABORTED || transaction->tstate == TX_Recovering)
+        if (index != -1)
         {
-          twoPCMssg *response = malloc(sizeof(twoPCMssg));
-          bzero(&response, sizeof(twoPCMssg));
-          response->ID = buff->ID;
-          response->msgKind = aborted;
-          int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                 sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+          struct tx *transaction = &txlog->transaction[index];
+          if (transaction->tstate == TX_COMMITTED)
+          {
+            twoPCMssg *response = malloc(sizeof(twoPCMssg));
+            response->ID = buff->ID;
+            response->msgKind = commited;
+            int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+          }
+          else if (transaction->tstate == TX_ABORTED || transaction->tstate == TX_Recovering)
+          {
+            twoPCMssg *response = malloc(sizeof(twoPCMssg));
+            response->ID = buff->ID;
+            response->msgKind = aborted;
+            int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+          }
         }
       }
-      else
+      else if (buff->msgKind == aborttxn)
       {
-        int transactionIndex = buff->ID % MAX_TX;
-        struct tx *transaction = &(txlog->transaction[transactionIndex]);
-        if (transaction->tstate == TX_VOTING)
+        printf("received abort txn\n");
+        int index = -1;
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
         {
-          if (buff->msgKind == prepared)
+          if (ptr[i].txID == buff->ID)
           {
-            transaction->preparedVotes += 1;
-            if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
-            {
-              perror("Msync problem");
-            }
+            index = i;
+            break;
           }
-          else if (buff->msgKind == no)
+        }
+        if (index != -1)
+        {
+          struct tx *transaction = &txlog->transaction[index];
+          if (transaction->tstate == TX_INPROGRESS || transaction->tstate == TX_VOTING)
           {
             transaction->tstate = TX_ABORTED;
-
+            transaction->inUse = 0;
             if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
             {
               perror("Msync problem");
             }
             twoPCMssg *response = malloc(sizeof(twoPCMssg));
-            bzero(&response, sizeof(twoPCMssg));
             response->ID = buff->ID;
             response->msgKind = aborted;
             for (int i = 0; i < MAX_WORKERS; i++)
             {
-              if ((&transaction->worker[i]) != NULL)
+              if (&(transaction->worker[i]) != NULL)
               {
                 int bytesSent = sendto(sockfd, (twoPCMssg *)response,
                                        sizeof(twoPCMssg), 0, (struct sockaddr *)&transaction->worker[i], sizeof(struct sockaddr_in));
               }
             }
-            free(response);
           }
-          if (transaction->preparedVotes == transaction->workersParticipating)
+        }
+      }
+      else if (buff->msgKind == abortandcrashtxn)
+      {
+        printf("received abort and crash txn\n");
+        int index = -1;
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
+        {
+          if (ptr[i].txID == buff->ID)
           {
-            transaction->tstate = TX_COMMITTED;
-            if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+            index = i;
+            break;
+          }
+        }
+        if (index != -1)
+        {
+          struct tx *transaction = &txlog->transaction[index];
+          if (transaction->tstate == TX_INPROGRESS || transaction->tstate == TX_VOTING)
+          {
+            _exit(0);
+          }
+        }
+      }
+      else
+      {
+        printf("in else case\n");
+        int index = -1;
+        struct tx *ptr = txlog->transaction;
+        for (int i = 0; i < MAX_TX; i++)
+        {
+          if (ptr[i].txID == buff->ID)
+          {
+            index = i;
+            break;
+          }
+        }
+        printf("index %d", index);
+        if (index != -1)
+        {
+          printf("index not -1\n");
+          struct tx *transaction = &(txlog->transaction[index]);
+          printf("transaction tstate:%d",transaction->tstate);
+          if (transaction->tstate == TX_VOTING)
+          {
+            printf("tx voting\n");
+            if (buff->msgKind == prepared)
             {
-              perror("Msync problem");
-            }
-            twoPCMssg *response = malloc(sizeof(twoPCMssg));
-            bzero(&response, sizeof(twoPCMssg));
-            response->ID = buff->ID;
-            response->msgKind = commited;
-            for (int i = 0; i < MAX_WORKERS; i++)
-            {
-              if ((&transaction->worker[i]) != NULL)
+              printf("received prepared\n");
+              transaction->preparedVotes += 1;
+              if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
               {
-                int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                       sizeof(twoPCMssg), 0, (struct sockaddr *)&transaction->worker[i], sizeof(struct sockaddr_in));
+                perror("Msync problem");
               }
             }
-            free(response);
+            else if (buff->msgKind == no)
+            {
+              transaction->tstate = TX_ABORTED;
+
+              if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+              {
+                perror("Msync problem");
+              }
+              twoPCMssg *response = malloc(sizeof(twoPCMssg));
+              response->ID = buff->ID;
+              response->msgKind = aborted;
+              for (int i = 0; i < MAX_WORKERS; i++)
+              {
+                if ((&transaction->worker[i]) != NULL)
+                {
+                  int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                         sizeof(twoPCMssg), 0, (struct sockaddr *)&transaction->worker[i], sizeof(struct sockaddr_in));
+                }
+              }
+            }
+            if (transaction->preparedVotes == transaction->workersParticipating)
+            {
+              printf("commited\n");
+              transaction->tstate = TX_COMMITTED;
+              transaction->inUse = 0;
+              if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+              {
+                perror("Msync problem");
+              }
+              twoPCMssg *response = malloc(sizeof(twoPCMssg));
+              response->ID = buff->ID;
+              response->msgKind = commited;
+              for (int i = 0; i < MAX_WORKERS; i++)
+              {
+                if ((&transaction->worker[i]) != NULL)
+                {
+                  int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                         sizeof(twoPCMssg), 0, (struct sockaddr *)&transaction->worker[i], sizeof(struct sockaddr_in));
+                }
+              }
+            }
           }
         }
       }
     }
-    // for (i = 0;; i = (++i % MAX_WORKERS)) {
-    //   struct sockaddr_in client;
-    //   socklen_t len;
-    //   bzero(&client, sizeof(client));
-    //   n = recvfrom(sockfd, buff, sizeof(buff), MSG_WAITALL,
-    // 	 (struct sockaddr *) &client, &len);
-    //   if (n < 0) {
-    //     perror("Receiving error:");
-    //     abort();
-    //   }
-    //   printf("Got a packet\n");
-    //   txlog->transaction[i].worker[0] = client;
-    //   // Make sure in memory copy is flushed to disk
-    //   if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE)) {
-    //     perror("Msync problem");
-    //   }
-
-    // }
-
-    // sleep(1000);
   }
 }

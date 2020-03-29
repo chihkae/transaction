@@ -19,13 +19,13 @@ struct tx {
   int workersParticipating;
   struct  sockaddr_in worker[MAX_WORKERS];
   clock_t start_t;
+  int inUse;
 };
 
 
 struct transactionSet {
   int initialized;
   struct tx transaction[MAX_TX];
-  int numWorkersInTransaction[MAX_TX];
 };
 
 #endif
