@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 echo "compiling"
-./tworker "6034" "6035" & p1=$!
-./tworker "6053" "6059" & p2=$!
-./tmanager "4023" & p3=$!
+./tworker "5053" "5059" & p1=$!
+./tworker "5023" "5399" & p2=$!
+./tmanager "9871" & p3=$!
 wait $p1 $p2 $p3
-./cmd begin localhost 6034 localhost 4023 1001
-./cmd newa localhost 6034 5
-./cmd newb localhost 6034 3
-./cmd join localhost 6053 localhost 4023 1001
-./cmd newa localhost 6053 12
-./cmd newb localhost 6053 23
+./cmd begin localhost 5053 localhost 9871 1001
+./cmd newa localhost 5053 5
+./cmd newb localhost 5053 3
+./cmd join localhost 5023 localhost 9871 1001
+./cmd newa localhost 5023 12
+./cmd newb localhost 5023 23
 killall -9 $p3
-./cmd commit localhost 6034
-./tmanager "4023" & p4 = $!
+./cmd commit localhost 5053
+./tmanager "9871" & p4 = $!
 wait $p1 $p2 $p4 $p3
 killall -9 $p1
 killall -9 $p2
