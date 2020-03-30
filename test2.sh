@@ -12,8 +12,7 @@ wait $p1 $p2 $p3
 ./cmd newb localhost 6053 23
 killall -9 $p3
 ./cmd commit localhost 6034
-./tmanager "4023" &
-p4 = $!
+./tmanager "4023" & p4 = $!
 wait $p1 $p2 $p4 $p3
 killall -9 $p1
 killall -9 $p2
