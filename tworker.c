@@ -303,14 +303,28 @@ int main(int argc, char **argv)
       //do nothing
     }
   }
+  int waitPeriod = 30000;
 
   while (1)
   {
 
-    int pollcount = poll(pfds, fd_count, 0);
+    int pollcount = poll(pfds, fd_count, waitPeriod);
     if (pollcount == -1)
     {
       perror("poll count error\n");
+    }else if(pollcount == 0){
+      if(log->log.txState == WTX_PREPAREDAndVoted){
+        printf("sending voting decision\n");
+         //sendPreparetocommit to manager
+        twoPCMssg *askDecision = malloc(sizeof(twoPCMssg));
+        askDecision->ID = log->log.txID;
+        askDecision->msgKind = votingDecision;
+        sendMssg(askDecision,log->log.transactionManager);
+        waitPeriod = 10000;
+      }else{
+        waitPeriod = 30000;
+        continue;
+      }
     }
     else if (pfds[0].revents & POLLIN)
     {
@@ -584,6 +598,7 @@ int main(int argc, char **argv)
         }
         else if (managerMssg->msgKind == aborted)
         {
+          printf("receiving aborted mssg from manager\n");
           //txn aborted so write old log values to disk
           log->log.txState = WTX_ABORTED;
           log->txData.A = log->log.oldA;

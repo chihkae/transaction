@@ -125,6 +125,7 @@ int main(int argc, char **argv)
 
   if (!txlog->initialized)
   {
+    printf("log file not initailized\n");
     int i;
     for (i = 0; i < MAX_TX; i++)
     {
@@ -139,16 +140,18 @@ int main(int argc, char **argv)
   }
   else
   {
+    printf("recovery phase \n");
     
     //abort transactions in progress or voting stage once recovered
     struct tx *ptr = txlog->transaction;
     for (int i = 0; i < MAX_TX; i++)
     {
-      if ((ptr[i].tstate == TX_INPROGRESS || ptr[i].tstate == TX_VOTING) && (ptr[i].tstate == 1))
+      if ((ptr[i].tstate == TX_INPROGRESS || ptr[i].tstate == TX_VOTING) && (ptr[i].inUse == 1))
       {
         printf("setting to recovery state\n");
-        ptr[i].tstate == TX_Recovering;
+        ptr[i].tstate = TX_Recovering;
       }
+      printf("state:%d",txlog->transaction[0].tstate);
       if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
       {
         perror("Msync problem");
@@ -172,6 +175,7 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < MAX_TX; i++)
     {
+      printf("after recovery state:%d",ptr[0].tstate);
       if (ptr[i].tstate == TX_Recovering)
       {
         struct sockaddr_in *addresses = ptr[i].worker;
@@ -179,11 +183,14 @@ int main(int argc, char **argv)
         {
           if (&(addresses[j]) != NULL)
           {
-            twoPCMssg *recoverymssg = malloc(sizeof(twoPCMssg));
+            printf("sending aborted mssg\n");
+            twoPCMssg *recoverymssg = (twoPCMssg*)malloc(sizeof(twoPCMssg));
             recoverymssg->ID = ptr[i].txID;
             recoverymssg->msgKind = aborted;
+            struct sockaddr* ptr2 = (struct sockaddr*)&addresses[j];
             int bytesSent = sendto(sockfd, (twoPCMssg *)recoverymssg,
-                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&addresses[j], sizeof(struct sockaddr_in));
+                                   sizeof(twoPCMssg), 0, (struct sockaddr *)ptr2, sizeof(*ptr2));
+            printf("bytesSent:%d",bytesSent);
           }
         }
         ptr[i].tstate = TX_ABORTED;
@@ -226,8 +233,9 @@ int main(int argc, char **argv)
                 twoPCMssg *abortMssg = malloc(sizeof(twoPCMssg));
                 abortMssg->ID = ptr[i].txID;
                 abortMssg->msgKind = aborted;
+                struct sockaddr* ptr2 = (struct sockaddr*)&addresses[j];
                 int bytesSent = sendto(sockfd, (twoPCMssg *)abortMssg,
-                                       sizeof(twoPCMssg), 0, (struct sockaddr *)&addresses[j], sizeof(struct sockaddr_in));
+                                       sizeof(twoPCMssg), 0, (struct sockaddr *)ptr2, sizeof(*ptr2));
               }
             }
           }
@@ -302,6 +310,7 @@ int main(int argc, char **argv)
           }
         }
         printf("index:%d",index);
+        printf("transaction state:%d\n",txlog->transaction[0].tstate);
         if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -331,9 +340,9 @@ int main(int argc, char **argv)
           perror("Msync problem");
         }
       }
-      else if (buff->msgKind == commitRequest)
+      else if (buff->msgKind == commitRequest || buff->msgKind == commitRequestCrash)
       {
-        printf("commitRequest\n");
+        printf("commitRequest or commitRequestCrash\n");
         int index = -1;
         struct tx *ptr = txlog->transaction;
         for (int i = 0; i < MAX_TX; i++)
@@ -349,7 +358,11 @@ int main(int argc, char **argv)
           printf("index:%d\n",index);
           printf("commit request index not -1\n");
           struct tx *transaction = &(txlog->transaction[index]);
-          *(&(transaction->tstate)) = TX_VOTING;
+          if(buff->msgKind == commitRequestCrash){
+            *(&(transaction->tstate)) = TX_VOTING_CRASH;
+          }else{
+            *(&(transaction->tstate)) = TX_VOTING;
+          }
           if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
@@ -489,7 +502,7 @@ int main(int argc, char **argv)
           printf("index not -1\n");
           struct tx *transaction = &(txlog->transaction[index]);
           printf("transaction tstate:%d",transaction->tstate);
-          if (transaction->tstate == TX_VOTING)
+          if (transaction->tstate == TX_VOTING || transaction->tstate == TX_VOTING_CRASH)
           {
             printf("tx voting\n");
             if (buff->msgKind == prepared)
@@ -503,8 +516,18 @@ int main(int argc, char **argv)
             }
             else if (buff->msgKind == no)
             {
+              if(transaction->tstate == TX_VOTING_CRASH){
+                printf("aborted transaction but will crash before announcing\n");
+                transaction->tstate = TX_ABORTED;
+                transaction->inUse = 0;
+                if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+                {
+                  perror("Msync problem");
+                }
+                _exit(0);
+              }
               transaction->tstate = TX_ABORTED;
-
+              transaction->inUse = 0;
               if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
               {
                 perror("Msync problem");
@@ -524,6 +547,16 @@ int main(int argc, char **argv)
             if (transaction->preparedVotes == transaction->workersParticipating)
             {
               printf("commited\n");
+              if(transaction->tstate == TX_VOTING_CRASH){
+                printf("commited but gonna crash before relaying back decision\n");
+                transaction->tstate = TX_COMMITTED;
+                transaction->inUse = 0;
+                if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
+                {
+                  perror("Msync problem");
+                }
+                _exit(0);
+              }
               transaction->tstate = TX_COMMITTED;
               transaction->inUse = 0;
               if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))

@@ -10,6 +10,7 @@ enum txState {
   TX_ABORTED,
   TX_COMMITTED,
   TX_Recovering,
+  TX_VOTING_CRASH
 };
 
 struct tx {
