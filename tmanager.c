@@ -57,6 +57,8 @@ int main(int argc, char **argv)
     perror("socket creation failed");
     exit(-1);
   }
+  int optval = 1;
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval, sizeof(int));
 
   // Setup my server information
   memset(&servAddr, 0, sizeof(servAddr));
@@ -137,6 +139,7 @@ int main(int argc, char **argv)
   }
   else
   {
+    
     //abort transactions in progress or voting stage once recovered
     struct tx *ptr = txlog->transaction;
     for (int i = 0; i < MAX_TX; i++)
