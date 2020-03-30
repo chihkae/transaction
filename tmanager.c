@@ -305,6 +305,7 @@ int main(int argc, char **argv)
             ptr[i].tstate = TX_INPROGRESS;
             ptr[i].txID = buff->ID;
             ptr[i].worker[0] = client;
+            ptr[i].preparedVotes = 0;
             ptr[i].workersParticipating = 1;
             break;
           }
@@ -410,16 +411,32 @@ int main(int argc, char **argv)
             twoPCMssg *response = malloc(sizeof(twoPCMssg));
             response->ID = buff->ID;
             response->msgKind = commited;
-            int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+            for (int i = 0; i < MAX_WORKERS; i++)
+            {
+              if (&(transaction->worker[i]) != NULL)
+              {
+                printf("trnsaction worker %d address not null\n",i);
+                int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                     sizeof(twoPCMssg), 0, (struct sockaddr *)&(transaction->worker[i]), sizeof(struct sockaddr_in));
+                  printf("sent\n");
+              }
+            }
           }
           else if (transaction->tstate == TX_ABORTED || transaction->tstate == TX_Recovering)
           {
             twoPCMssg *response = malloc(sizeof(twoPCMssg));
             response->ID = buff->ID;
             response->msgKind = aborted;
-            int bytesSent = sendto(sockfd, (twoPCMssg *)response,
-                                   sizeof(twoPCMssg), 0, (struct sockaddr *)&client, sizeof(client));
+            for (int i = 0; i < MAX_WORKERS; i++)
+            {
+              if (&(transaction->worker[i]) != NULL)
+              {
+                printf("trnsaction worker %d address not null\n",i);
+                int bytesSent = sendto(sockfd, (twoPCMssg *)response,
+                                     sizeof(twoPCMssg), 0, (struct sockaddr *)&(transaction->worker[i]), sizeof(struct sockaddr_in));
+                printf("sent\n");
+              }
+            }
           }
         }
       }
@@ -439,7 +456,7 @@ int main(int argc, char **argv)
         if (index != -1)
         {
           struct tx *transaction = &txlog->transaction[index];
-          if (transaction->tstate == TX_INPROGRESS || transaction->tstate == TX_VOTING)
+          if (transaction->tstate == TX_INPROGRESS || transaction->tstate == TX_VOTING || transaction->tstate == TX_VOTING_CRASH)
           {
             transaction->tstate = TX_ABORTED;
             transaction->inUse = 0;

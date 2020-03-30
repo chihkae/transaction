@@ -253,7 +253,7 @@ int main(int argc, char **argv)
               log->txData.B = log->log.oldB;
               strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
               log->log.oldSaved = 0;
-            }
+            } 
             log->log.txState = WTX_TRUNCATE;
             if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
             {
@@ -375,7 +375,7 @@ int main(int argc, char **argv)
         if(transactionManager != NULL){
           log->log.transactionManager = *transactionManager;
         }
-        if (msync(&(log->log), sizeof(struct workerLog), MS_SYNC | MS_INVALIDATE))
+        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
         }
@@ -423,7 +423,7 @@ int main(int argc, char **argv)
         if (log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE)
         {
           log->txData.B = cmd->newValue;
-          if (msync(&(log->txData), sizeof(struct transactionData), MS_SYNC | MS_INVALIDATE))
+          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
@@ -450,7 +450,7 @@ int main(int argc, char **argv)
         if (log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE)
         {
           strncpy(log->txData.IDstring, cmd->strData.newID, IDLEN);
-          if (msync(&(log->txData), sizeof(struct transactionData), MS_SYNC | MS_INVALIDATE))
+          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
@@ -466,7 +466,7 @@ int main(int argc, char **argv)
           strncpy(log->txData.IDstring, cmd->strData.newID, IDLEN);
           strncpy(log->log.newIDstring, cmd->strData.newID, IDLEN);
 
-          if (msync(&(log->log), sizeof(struct workerLog), MS_SYNC | MS_INVALIDATE))
+          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
