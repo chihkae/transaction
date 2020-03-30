@@ -248,9 +248,12 @@ int main(int argc, char **argv)
 
           if (managerMssg->msgKind == aborted)
           {
-            log->txData.A = log->log.oldA;
-            log->txData.B = log->log.oldB;
-            strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+            if(log->log.oldSaved == 1){
+              log->txData.A = log->log.oldA;
+              log->txData.B = log->log.oldB;
+              strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+              log->log.oldSaved = 0;
+            }
             log->log.txState = WTX_TRUNCATE;
             if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
             {
@@ -260,9 +263,12 @@ int main(int argc, char **argv)
           }
           else if (managerMssg->msgKind == commited)
           {
-            log->txData.A = log->log.newA;
-            log->txData.B = log->log.newB;
-            strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
+            if(log->log.oldSaved == 1){
+              log->txData.A = log->log.newA;
+              log->txData.B = log->log.newB;
+              strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
+              log->log.oldSaved = 0;
+            }
             log->log.txState = WTX_TRUNCATE;
             if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
             {
@@ -277,9 +283,12 @@ int main(int argc, char **argv)
              log->log.txState == WTX_ABORTED_VOTEABORT || log->log.txState == WTX_PREPAREDAndNotVoted)
     {
       //rewrite old values to disk
-      log->txData.A = log->log.oldA;
-      log->txData.B = log->log.oldB;
-      strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+      if(log->log.oldSaved == 1){
+        log->txData.A = log->log.oldA;
+        log->txData.B = log->log.oldB;
+        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        log->log.oldSaved = 0;
+      }
       log->log.txState = WTX_TRUNCATE;
       if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
       {
@@ -288,10 +297,12 @@ int main(int argc, char **argv)
     }
     else if (log->log.txState == WTX_COMMITTED)
     {
-      //rewrite new values to disk
-      log->txData.A = log->log.newA;
-      log->txData.B = log->log.newB;
-      strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
+      if(log->log.oldSaved == 1){
+        log->txData.A = log->log.newA;
+        log->txData.B = log->log.newB;
+        strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
+        log->log.oldSaved = 0;
+      }
       log->log.txState = WTX_TRUNCATE;
       if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
       {
@@ -350,20 +361,21 @@ int main(int argc, char **argv)
         log->log.txID = cmd->tid;
         log->log.txState = WTX_BEGIN;
         log->log.transactionManager = managerAddr;
-        log->log.oldA = log->txData.A;
-        log->log.oldB = log->txData.B;
-        strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-        log->log.oldSaved = 1;
-
+        if(log->log.oldSaved == 0){
+          log->log.oldA = log->txData.A;
+          log->log.oldB = log->txData.B;
+          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+          log->log.oldSaved = 1;
+        }
         //initialize newA/newB/idString so we know which ones get updated by cmds
-        log->log.newA = -2001;
-        log->log.newB = -2001;
-        strncpy(log->log.newIDstring, "-2001", IDLEN);
+        log->log.newA = log->txData.A;
+        log->log.newB = log->txData.B;
+        strncpy(log->log.newIDstring, log->txData.IDstring, IDLEN);
         setUpSocket(cmd->strData.hostName, cmd->port);
         if(transactionManager != NULL){
           log->log.transactionManager = *transactionManager;
         }
-        if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+        if (msync(&(log->log), sizeof(struct workerLog), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
         }
@@ -391,12 +403,15 @@ int main(int argc, char **argv)
         }
         else if (log->log.txState == WTX_BEGIN)
         {
-          //update new values in log
-          log->log.oldA = log->txData.A;
-          log->log.oldB = log->txData.B;
-          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-          log->log.oldSaved = 1;
+          if(log->log.oldSaved == 0){
+            log->log.oldA = log->txData.A;
+            log->log.oldB = log->txData.B;
+            strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+            log->log.oldSaved = 1;
+          }
+          log->txData.A = cmd->newValue;
           log->log.newA = cmd->newValue;
+
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
@@ -408,17 +423,20 @@ int main(int argc, char **argv)
         if (log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE)
         {
           log->txData.B = cmd->newValue;
-          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+          if (msync(&(log->txData), sizeof(struct transactionData), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
         }
         else if (log->log.txState == WTX_BEGIN)
         {
-          log->log.oldA = log->txData.A;
-          log->log.oldB = log->txData.B;
-          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-          log->log.oldSaved = 1;
+          if(log->log.oldSaved == 0){
+            log->log.oldA = log->txData.A;
+            log->log.oldB = log->txData.B;
+            strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+            log->log.oldSaved = 1;
+          }
+          log->txData.B = cmd->newValue;
           log->log.newB = cmd->newValue;
 
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
@@ -432,20 +450,23 @@ int main(int argc, char **argv)
         if (log->log.txState == WTX_NOTACTIVE || log->log.txState == WTX_TRUNCATE)
         {
           strncpy(log->txData.IDstring, cmd->strData.newID, IDLEN);
-          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+          if (msync(&(log->txData), sizeof(struct transactionData), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
         }
         else if (log->log.txState == WTX_BEGIN)
         {
-          log->log.oldA = log->txData.A;
-          log->log.oldB = log->txData.B;
-          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-          log->log.oldSaved = 1;
+          if(log->log.oldSaved == 0){
+            log->log.oldA = log->txData.A;
+            log->log.oldB = log->txData.B;
+            strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+            log->log.oldSaved = 1;
+          }
+          strncpy(log->txData.IDstring, cmd->strData.newID, IDLEN);
           strncpy(log->log.newIDstring, cmd->strData.newID, IDLEN);
 
-          if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+          if (msync(&(log->log), sizeof(struct workerLog), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
@@ -464,10 +485,12 @@ int main(int argc, char **argv)
       {
         //update old values to log
         //write commited values to new values of log
-        log->log.oldA = log->txData.A;
-        log->log.oldB = log->txData.B;
-        strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-        log->log.oldSaved = 1;
+        if(log->log.oldSaved == 0){
+          log->log.oldA = log->txData.A;
+          log->log.oldB = log->txData.B;
+          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+          log->log.oldSaved = 1;
+        }
         if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -483,10 +506,12 @@ int main(int argc, char **argv)
       {
         //update old values to log
         //write commited values to new values of log
-        log->log.oldA = log->txData.A;
-        log->log.oldB = log->txData.B;
-        strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
-        log->log.oldSaved = 1;
+        if(log->log.oldSaved == 0){
+          log->log.oldA = log->txData.A;
+          log->log.oldB = log->txData.B;
+          strncpy(log->log.oldIDstring, log->txData.IDstring, IDLEN);
+          log->log.oldSaved = 1;
+        }
         if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -502,10 +527,13 @@ int main(int argc, char **argv)
       {
         //abort locally
         //rewrite old values to disk
-        log->txData.A = log->log.oldA;
-        log->txData.B = log->log.oldB;
-        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        if(log->log.oldSaved == 1){
+          log->txData.A = log->log.oldA;
+          log->txData.B = log->log.oldB;
+          strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        }
         log->log.txState = WTX_ABORTED;
+        log->log.oldSaved = 0;
         if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -521,10 +549,13 @@ int main(int argc, char **argv)
       {
         //abort locally
         //rewrite old values to disk
-        log->txData.A = log->log.oldA;
-        log->txData.B = log->log.oldB;
-        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        if(log->log.oldSaved == 1){
+          log->txData.A = log->log.oldA;
+          log->txData.B = log->log.oldB;
+          strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        }
         log->log.txState = WTX_ABORTED;
+        log->log.oldSaved = 0;
         if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -540,10 +571,13 @@ int main(int argc, char **argv)
       {
         //abort locally
         //rewrite old values to disk
-        log->txData.A = log->log.oldA;
-        log->txData.B = log->log.oldB;
-        strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        if(log->log.oldSaved == 1){
+          log->txData.A = log->log.oldA;
+          log->txData.B = log->log.oldB;
+          strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+        }
         log->log.txState = WTX_ABORTED_VOTEABORT;
+        log->log.oldSaved = 0;
         if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
         {
           perror("Msync problem");
@@ -575,6 +609,9 @@ int main(int argc, char **argv)
           if (log->log.txState == WTX_ABORTED_VOTEABORT)
           {
             sleep(delay);
+            if(delay < 0){
+              _exit(0);
+            }
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
             mssgToTxnManager->ID = log->log.txID;
             mssgToTxnManager->msgKind = no;
@@ -584,6 +621,9 @@ int main(int argc, char **argv)
           {
             log->log.txState = WTX_PREPAREDAndNotVoted;
             sleep(delay);
+            if(delay < 0){
+              _exit(0);
+            }
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
             mssgToTxnManager->ID = log->log.txID;
             mssgToTxnManager->msgKind = prepared;
@@ -601,36 +641,31 @@ int main(int argc, char **argv)
           printf("receiving aborted mssg from manager\n");
           //txn aborted so write old log values to disk
           log->log.txState = WTX_ABORTED;
-          log->txData.A = log->log.oldA;
-          log->txData.B = log->log.oldB;
-          strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+          if(log->log.oldSaved == 1){
+            log->txData.A = log->log.oldA;
+            log->txData.B = log->log.oldB;
+            strncpy(log->txData.IDstring, log->log.oldIDstring, IDLEN);
+            if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+            {
+              perror("Msync problem");
+            }
+          }
+          log->log.txState = WTX_TRUNCATE;
+          log->log.oldSaved = 0;
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
           }
-          log->log.txState = WTX_TRUNCATE;
         }
         else if (managerMssg->msgKind == commited)
         {
           printf("received commited mssg\n");
           log->log.txState = WTX_COMMITTED;
-          //txn commited so write new log values to disk
-          //check if newA is what we updated in the txn
-          if (log->log.newA != -2001)
-          {
-            log->txData.A = log->log.newA;
-          }
-          //check if newB is what we updated in the txn
-          if (log->log.newB != -2001)
-          {
-            log->txData.B = log->log.newB;
-          }
-          //check if newIDString is what we update in the txn
-          if (strncmp(log->log.newIDstring, "-2001", IDLEN) != 0)
-          {
-            strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
-          }
+          log->txData.A = log->log.newA;
+          log->txData.B = log->log.newB;
+          strncpy(log->txData.IDstring, log->log.newIDstring, IDLEN);
           log->log.txState = WTX_TRUNCATE;
+          log->log.oldSaved = 0;
           if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
