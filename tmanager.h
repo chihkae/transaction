@@ -1,4 +1,4 @@
-
+#include <sys/time.h>
 #ifndef TMANAGER_h
 #define TMANGER_h 100
 #define MAX_WORKERS 6
@@ -19,7 +19,7 @@ struct tx {
   int preparedVotes;
   int workersParticipating;
   struct  sockaddr_in worker[MAX_WORKERS];
-  clock_t start_t;
+  struct timeval start;
   int inUse;
 };
 

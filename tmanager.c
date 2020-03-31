@@ -17,6 +17,7 @@
 #include <strings.h>
 #include "msg.h"
 #include <poll.h>
+#include <sys/time.h>
 
 void usage(char *cmd)
 {
@@ -198,7 +199,7 @@ int main(int argc, char **argv)
       }
     }
 
-    poll_count = poll(pfds, fd_count, 10000);
+    poll_count = poll(pfds, fd_count, 2000);
     if (poll_count == -1)
     {
       printf("poll error\n");
@@ -207,22 +208,26 @@ int main(int argc, char **argv)
     //timeout scenario
     if (poll_count == 0)
     {
-      printf("timeout\n");
+      printf("timeout");
       //abort transaction if 10 seconds have elapsed since commitRequest
       struct tx *ptr = txlog->transaction;
-      clock_t end_t = clock();
+      struct timeval end;
+      gettimeofday(&end,0);
       for (int i = 0; i < MAX_TX; i++)
       {
         if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
         {
-          printf("yes\n");
-          double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
-          printf("timeelapsed:%d",timeElapsed);
+          unsigned long elapsedTime = (end.tv_sec) - (ptr[i].start.tv_sec);
+          printf("timeelpased %lu\n",elapsedTime);
           printf("preparedVotes:%d",ptr[i].preparedVotes);
-          printf("workersparticipating:%d",ptr[i].workersParticipating);
-          printf("true votercount:%d",(ptr[i].preparedVotes < ptr[i].workersParticipating));
-          printf("true elapsed",(timeElapsed > (double)10.0));
-          if ((ptr[i].preparedVotes < ptr[i].workersParticipating) && (timeElapsed > (double)10.0))
+          printf("workersparticipating:%d\n",ptr[i].workersParticipating);
+          printf("true votercount:%d\n",(ptr[i].preparedVotes < ptr[i].workersParticipating));
+          if(elapsedTime > 10.0){
+            printf("true");
+          }else{
+            printf("false\n");
+          }
+          if ((ptr[i].preparedVotes < ptr[i].workersParticipating) && (elapsedTime > 10.0))
           {
             printf("timed out and aborted transaction\n");
             ptr[i].tstate = TX_ABORTED;
@@ -252,40 +257,6 @@ int main(int argc, char **argv)
     else if (pfds[0].revents & POLLIN)
     {
       printf("poll in\n");
-      //check for timeouts of other txns while receiving msgs
-      //abort transaction if 10 seconds have elapsed since commitRequest
-      struct tx *ptr = txlog->transaction;
-      clock_t end_t = clock();
-      for (int i = 0; i < MAX_TX; i++)
-      {
-        if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
-        {
-          double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
-          if (ptr[i].preparedVotes < ptr[i].workersParticipating && timeElapsed > 10.0)
-          {
-            ptr[i].tstate = TX_ABORTED;
-            ptr[i].inUse = 0;
-            if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
-            {
-              perror("Msync problem");
-            }
-            struct sockaddr_in *addresses = ptr[i].worker;
-
-            for (int j = 0; j < MAX_WORKERS; j++)
-            {
-              if (&(addresses[j]) != NULL)
-              {
-                twoPCMssg *abortMssg = malloc(sizeof(twoPCMssg));
-                abortMssg->ID = ptr[i].txID;
-                abortMssg->msgKind = aborted;
-                int bytesSent = sendto(sockfd, (twoPCMssg *)abortMssg,
-                                       sizeof(twoPCMssg), 0, (struct sockaddr *)&addresses[j], sizeof(struct sockaddr_in));
-              }
-            }
-          }
-        }
-      }
-
       struct sockaddr_in client;
       socklen_t len;
       twoPCMssg *buff = (twoPCMssg *)malloc(sizeof(twoPCMssg));
@@ -390,8 +361,10 @@ int main(int argc, char **argv)
               printf("sent\n");
             }
           }
-          transaction->start_t = clock();
-          printf("transaction->start_t:%d",transaction->start_t);
+          struct timeval start;
+          gettimeofday(&start,0);
+          transaction->start = start;
+          printf("transaction->start_t:%d",transaction->start);
           if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");
