@@ -199,7 +199,7 @@ int main(int argc, char **argv)
       }
     }
 
-    poll_count = poll(pfds, fd_count, 2000);
+    poll_count = poll(pfds, fd_count, 10000);
     if (poll_count == -1)
     {
       printf("poll error\n");
