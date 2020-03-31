@@ -12,6 +12,7 @@ sleep 5
 ./cmd newb localhost 7777 23
 sleep 4
 ./cmd commit localhost 1111
+sleep 4
 kill $p1
 wait $p1
 kill $p2
