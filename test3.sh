@@ -11,7 +11,9 @@ sleep 5
 ./cmd newa localhost 2342 12
 ./cmd newb localhost 2342 23
 ./cmd commitcrash localhost 5333
-sleep 2
+sleep 3
+./tmanager "5432" & p3=$!
+sleep 8
 kill $p1
 wait $p1
 kill $p2
