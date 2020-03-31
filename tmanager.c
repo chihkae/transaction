@@ -141,7 +141,7 @@ int main(int argc, char **argv)
   else
   {
     printf("recovery phase \n");
-    
+
     //abort transactions in progress or voting stage once recovered
     struct tx *ptr = txlog->transaction;
     for (int i = 0; i < MAX_TX; i++)
@@ -216,7 +216,7 @@ int main(int argc, char **argv)
         if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
         {
           printf("yes\n");
-          double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
+          double timeElapsed = (double)((end_t - ptr[i].start_t) / CLOCKS_PER_SEC);
           printf("timeelapsed:%d",timeElapsed);
           printf("preparedVotes:%d",ptr[i].preparedVotes);
           printf("workersparticipating:%d",ptr[i].workersParticipating);
