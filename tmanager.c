@@ -215,9 +215,16 @@ int main(int argc, char **argv)
       {
         if (ptr[i].tstate == TX_VOTING && ptr[i].inUse == 1)
         {
+          printf("yes\n");
           double timeElapsed = ((double)(end_t - ptr[i].start_t)) / CLOCKS_PER_SEC;
-          if (ptr[i].preparedVotes < ptr[i].workersParticipating && timeElapsed > 10.0)
+          printf("timeelapsed:%d",timeElapsed);
+          printf("preparedVotes:%d",ptr[i].preparedVotes);
+          printf("workersparticipating:%d",ptr[i].workersParticipating);
+          printf("true votercount:%d",(ptr[i].preparedVotes < ptr[i].workersParticipating));
+          printf("true elapsed",(timeElapsed > (double)10.0));
+          if ((ptr[i].preparedVotes < ptr[i].workersParticipating) && (timeElapsed > (double)10.0))
           {
+            printf("timed out and aborted transaction\n");
             ptr[i].tstate = TX_ABORTED;
             ptr[i].inUse = 0;
             if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
@@ -384,6 +391,7 @@ int main(int argc, char **argv)
             }
           }
           transaction->start_t = clock();
+          printf("transaction->start_t:%d",transaction->start_t);
           if (msync(txlog, sizeof(struct transactionSet), MS_SYNC | MS_INVALIDATE))
           {
             perror("Msync problem");

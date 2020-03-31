@@ -610,6 +610,10 @@ int main(int argc, char **argv)
           {
             sleep(delay);
             if(delay < 0){
+              if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+              {
+                perror("Msync problem");
+              }
               _exit(0);
             }
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
@@ -622,6 +626,10 @@ int main(int argc, char **argv)
             log->log.txState = WTX_PREPAREDAndNotVoted;
             sleep(delay);
             if(delay < 0){
+              if (msync(log, sizeof(struct logFile), MS_SYNC | MS_INVALIDATE))
+              {
+                perror("Msync problem");
+              }
               _exit(0);
             }
             twoPCMssg *mssgToTxnManager = malloc(sizeof(twoPCMssg));
